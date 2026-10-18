@@ -4,7 +4,9 @@ const mock = vi.hoisted(() => ({
   handlers: new Map<string, (line: string) => void>(),
   sent: [] as { method: string; params?: Record<string, unknown> }[],
   config: {} as Record<string, unknown>,
+  configByCwd: {} as Record<string, Record<string, unknown>>,
   configError: false,
+  configStalls: false,
   pages: [{ data: [] as unknown[], nextCursor: null as string | null }],
   spawn: vi.fn(async (..._args: unknown[]) => undefined),
   kill: vi.fn(async (_id: string) => undefined),
@@ -25,6 +27,7 @@ vi.mock("../../core/child", () => ({
     const request = JSON.parse(line);
     mock.sent.push(request);
     if (request.id === undefined) return;
+    if (request.method === "config/read" && mock.configStalls) return;
     if (request.method === "config/read" && mock.configError) {
       mock.handlers.get(childId)?.(
         JSON.stringify({ id: request.id, error: { message: "Unsupported" } }),
@@ -35,7 +38,9 @@ vi.mock("../../core/child", () => ({
     if (request.method === "account/read") {
       result = { account: null, requiresOpenaiAuth: false };
     } else if (request.method === "config/read") {
-      result = { config: mock.config };
+      result = {
+        config: mock.configByCwd[request.params?.cwd] ?? mock.config,
+      };
     } else if (request.method === "model/list") {
       result = mock.pages[request.params?.cursor ? 1 : 0];
     }
@@ -49,7 +54,9 @@ beforeEach(() => {
   mock.handlers.clear();
   mock.sent.length = 0;
   mock.config = {};
+  mock.configByCwd = {};
   mock.configError = false;
+  mock.configStalls = false;
   mock.pages = [
     { data: [{ model: "gpt-default", isDefault: true }], nextCursor: null },
   ];
@@ -77,7 +84,7 @@ describe("discoverCodexModels", () => {
       expect(models[0].settings).toBeUndefined();
       expect(
         mock.sent.find((request) => request.method === "config/read")?.params,
-      ).toEqual({});
+      ).toEqual({ cwd: "/project" });
       expect(mock.handlers.size).toBe(0);
       expect(mock.kill).toHaveBeenCalledOnce();
     },
@@ -154,6 +161,34 @@ describe("discoverCodexModels", () => {
     expect(
       (await discoverCodexModels()).map((entry) => entry.nativeId),
     ).toEqual(["gpt-default"]);
+  });
+
+  it("returns listed models without waiting out a stalled config/read", async () => {
+    vi.useFakeTimers();
+    try {
+      mock.configStalls = true;
+      let models: string[] | undefined;
+      const pending = discoverCodexModels().then((result) => {
+        models = result.map((entry) => entry.nativeId);
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(models).toEqual(["gpt-default"]);
+      await pending;
+      expect(mock.kill).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads the configured model as seen from the working directory", async () => {
+    mock.configByCwd = {
+      "/home/user": { model_provider: "codex-router", model: "global/model" },
+      "/project": { model_provider: "codex-router", model: "project/model" },
+    };
+    expect((await discoverCodexModels("/project"))[0].nativeId).toBe(
+      "project/model",
+    );
+    expect((await discoverCodexModels())[0].nativeId).toBe("global/model");
   });
 
   it("ignores an unset configured model", async () => {

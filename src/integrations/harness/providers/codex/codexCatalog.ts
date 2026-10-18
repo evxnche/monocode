@@ -18,6 +18,8 @@ import { JsonRpcClient } from "../../core/jsonRpc";
 const PROBE_ID = "monocode-codex-probe";
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const REQUEST_TIMEOUT_MS = 12_000;
+// config/read only adds an optional model, so it must not hold up model/list.
+const CONFIG_READ_TIMEOUT_MS = 3_000;
 
 const REASONING_LABELS: Record<string, string> = {
   none: "None",
@@ -112,8 +114,9 @@ export async function discoverCodexModels(
           rpc
             .request<{ config?: unknown }>(
               "config/read",
-              {},
-              REQUEST_TIMEOUT_MS,
+              // Without cwd Codex skips project .codex layers.
+              { cwd },
+              CONFIG_READ_TIMEOUT_MS,
             )
             .catch(() => null),
         ]);
