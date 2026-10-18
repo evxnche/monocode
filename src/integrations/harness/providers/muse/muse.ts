@@ -217,8 +217,10 @@ export async function sendMuseTurn(input: SendTurnInput): Promise<void> {
 export async function cancelMuseTurn(sessionId: string): Promise<void> {
   const settle = activeTurns.get(sessionId);
   // Mute output that is already queued. A live turn clears the flag when it
-  // settles; a cancel during binary resolve keeps it so send bails out.
-  cancelledThreads.add(sessionId);
+  // settles; a cancel during binary resolve keeps it so send bails out. An
+  // idle cancel has nothing to mute and must not swallow the next send.
+  if (settle || resolvingThreads.has(sessionId))
+    cancelledThreads.add(sessionId);
   if (settle) await settle();
   else await killChild(sessionId).catch(() => undefined);
 }

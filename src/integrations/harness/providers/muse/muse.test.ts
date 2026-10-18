@@ -283,6 +283,26 @@ describe("muse turns", () => {
     expect(events).toContainEqual({ type: "message.completed" });
   });
 
+  it("runs the next turn after a cancel lands while idle", async () => {
+    // A late Stop after a turn settles finds no turn or resolve to mute.
+    await cancelMuseTurn("thread-1");
+    const events: HarnessEvent[] = [];
+    const onAccepted = vi.fn();
+    const turn = sendMuseTurn({ ...baseInput(events), onAccepted });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(spawned?.command).toBe("/fake/muse");
+    expect(onAccepted).toHaveBeenCalledOnce();
+    onLine!(
+      line("run.terminal.completed", {
+        kind: "run_terminal",
+        terminal: "completed",
+      }),
+    );
+    onExit!(0);
+    await turn;
+    expect(events).toContainEqual({ type: "message.completed" });
+  });
+
   it("reports auth failures with the login hint", async () => {
     const events: HarnessEvent[] = [];
     await expect(
