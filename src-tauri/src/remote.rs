@@ -394,12 +394,16 @@ fn supported_remote_method(method: &str) -> bool {
     )
 }
 
+/// Makes the SSH target inside the setup job, such as a new codespace.
+type PrepareTarget = Box<dyn FnOnce(&Arc<Job>) -> Result<SshTarget, String> + Send>;
+
 fn start_ssh_job(
     app: AppHandle,
     target: SshTarget,
     name: String,
     existing: Option<StoredMachine>,
     upgrade: bool,
+    prepare: Option<PrepareTarget>,
 ) -> Result<String, String> {
     let job = Job::new();
     let id = job.view().id;
@@ -420,7 +424,10 @@ fn start_ssh_job(
     std::thread::spawn(move || {
         let prepared = (|| -> Result<(StoredMachine, Tunnel), String> {
             let askpass = job.askpass()?;
-            let mut target = target;
+            let mut target = match prepare {
+                Some(prepare) => prepare(&job)?,
+                None => target,
+            };
             let mut machine = if let Some(mut existing) = existing {
                 if upgrade {
                     let platform = remote_ssh::detect_platform(&target, &job, &askpass)?;
@@ -583,10 +590,52 @@ pub fn remote_ssh_begin(
             target,
             port,
             remote_port: 3774,
+            config_file: None,
+            codespace: None,
         },
         name.trim().chars().take(100).collect(),
         None,
         false,
+        None,
+    )
+}
+
+/// Create a free GitHub codespace on `repo` and set it up like an SSH machine.
+#[tauri::command(async)]
+pub fn remote_codespace_begin(
+    app: AppHandle,
+    repo: String,
+    branch: String,
+    name: String,
+) -> Result<String, String> {
+    let repo = crate::codespaces::validate_repo(&repo)?;
+    let branch = crate::codespaces::validate_branch(&branch)?;
+    let config_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("codespaces");
+    let name: String = name.trim().chars().take(100).collect();
+    let name = if name.is_empty() {
+        format!("Codespace · {repo}")
+    } else {
+        name
+    };
+    start_ssh_job(
+        app,
+        SshTarget {
+            target: String::new(),
+            port: None,
+            remote_port: 3774,
+            config_file: None,
+            codespace: None,
+        },
+        name,
+        None,
+        false,
+        Some(Box::new(move |job| {
+            crate::codespaces::create(job, &config_dir, &repo, branch.as_deref())
+        })),
     )
 }
 
@@ -617,6 +666,7 @@ pub fn remote_ssh_reconnect(
         machine.name.clone(),
         Some(machine),
         upgrade.unwrap_or(false),
+        None,
     )
 }
 

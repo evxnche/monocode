@@ -17,6 +17,13 @@ pub struct SshTarget {
     pub target: String,
     pub port: Option<u16>,
     pub remote_port: u16,
+    /// OpenSSH config written by `gh codespace ssh --config`, used instead of
+    /// the user's own config for a GitHub codespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_file: Option<String>,
+    /// The GitHub codespace this target reaches, when it is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codespace: Option<String>,
 }
 
 pub fn validate_target(target: &str, port: Option<u16>) -> Result<String, String> {
@@ -188,8 +195,6 @@ fn command(target: &SshTarget, interactive: bool) -> Command {
         "-o",
         "ExitOnForwardFailure=yes",
         "-o",
-        "StrictHostKeyChecking=ask",
-        "-o",
         "NumberOfPasswordPrompts=3",
         "-o",
         "ForkAfterAuthentication=no",
@@ -202,6 +207,13 @@ fn command(target: &SshTarget, interactive: bool) -> Command {
             "BatchMode=yes"
         },
     ]);
+    if let Some(config) = &target.config_file {
+        // gh's relay authenticates the codespace, and its config skips host
+        // keys for the codespace's throwaway sshd.
+        command.args(["-F", config]);
+    } else {
+        command.args(["-o", "StrictHostKeyChecking=ask"]);
+    }
     if let Some(port) = target.port {
         command.args(["-p", &port.to_string()]);
     }
@@ -706,6 +718,8 @@ mod tests {
             target: required("MONOCODE_TEST_SSH_TARGET"),
             port: Some(required("MONOCODE_TEST_SSH_PORT").parse().unwrap()),
             remote_port: required("MONOCODE_TEST_HOST_PORT").parse().unwrap(),
+            config_file: None,
+            codespace: None,
         };
         let make_command = || {
             let mut command = command(&target, false);

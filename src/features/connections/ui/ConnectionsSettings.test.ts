@@ -30,7 +30,11 @@ beforeEach(() => {
   vi.mocked(invoke).mockReset();
   vi.mocked(invoke).mockImplementation(async (command) => {
     if (command === "remote_machines") return [...machines];
-    if (command === "remote_ssh_begin" || command === "remote_ssh_reconnect")
+    if (
+      command === "remote_ssh_begin" ||
+      command === "remote_ssh_reconnect" ||
+      command === "remote_codespace_begin"
+    )
       return "setup";
     if (command === "remote_ssh_poll") return { ...state };
     if (command === "remote_request")
@@ -103,6 +107,34 @@ it("starts SSH setup from Settings and makes the machine available after native 
       'input[placeholder="user@my-mac-mini or an SSH alias"]',
     ),
   ).toBeNull();
+});
+
+it("creates a free GitHub codespace and explains how to sign in on it", async () => {
+  await render();
+  await act(async () => button("Add machine").click());
+  await act(async () => button("Free cloud").click());
+  expect(container.textContent).toContain("Create a free cloud machine");
+  await fill('input[placeholder="owner/repo"]', "evxnche/monocode");
+  await act(async () => button("Create and connect").click());
+  expect(invoke).toHaveBeenCalledWith("remote_codespace_begin", {
+    repo: "evxnche/monocode",
+    branch: "",
+    name: "",
+  });
+  const codespace: RemoteMachine = {
+    ...machine,
+    name: "Codespace · evxnche/monocode",
+    ssh: {
+      target: "cs.fuzzy-space.main",
+      remotePort: 3774,
+      codespace: "fuzzy-space",
+    },
+  };
+  machines = [codespace];
+  state = { ...state, done: true, machine: codespace };
+  await poll();
+  expect(container.textContent).toContain("GitHub Codespace · fuzzy-space");
+  expect(container.textContent).toContain("gh codespace ssh -c fuzzy-space");
 });
 
 it("requires an explicit host trust answer and forwards secrets only to the native prompt", async () => {

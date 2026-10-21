@@ -25,6 +25,19 @@ The forward binds to a temporary port on the laptop's loopback interface. Quitti
 
 **Remove** in Settings asks for confirmation and offers two choices. **Remove from this desktop only** deletes the saved connection and closes its forward. The host keeps running, and this desktop's device credential stays valid on it. **Revoke access and remove** first asks the host to revoke the credential this desktop is using, then removes the connection. It needs the machine to be reachable, and if revocation fails the connection is kept. Neither option stops the host, affects other desktops' credentials, or deletes sessions. Adding the same machine again reconnects its projects, tabs, and history.
 
+## Free cloud machine (GitHub Codespaces)
+
+No spare computer? MonoCode can borrow one from GitHub. In **Settings → Connections → Add machine**, choose **Free cloud**, enter a GitHub repository as `owner/repo` (and optionally a branch), and click **Create and connect**. MonoCode uses your GitHub CLI login to create a 2-core codespace with that repository checked out in `/workspaces`, then installs and pairs the host exactly as it does over SSH.
+
+Prerequisites and limits:
+
+- Install the [GitHub CLI](https://cli.github.com), sign in with `gh auth login`, and allow codespaces once with `gh auth refresh -h github.com -s codespace`.
+- Personal GitHub accounts include free codespace hours each month (historically 120 core hours, which is 60 hours on this 2-core machine). Check your usage at [github.com/settings/billing](https://github.com/settings/billing). MonoCode never picks a paid machine size.
+- The codespace stops after 4 hours without a connection (GitHub's maximum idle timeout), and that stops its agents. **Reconnect** starts it again through `gh`. GitHub deletes stopped codespaces after its retention period (30 days by default).
+- Sign in to the providers inside the codespace once: run `gh codespace ssh -c NAME` in a terminal, install the CLI you want (for example `npm i -g @openai/codex`), and log in with its device or headless flow.
+- MonoCode writes the codespace's SSH settings to its own data directory; your `~/.ssh/config` is not changed. Removing the machine in Settings does not delete the codespace; delete it at [github.com/codespaces](https://github.com/codespaces).
+- The repository's dev container must run `sshd`. GitHub's default image does; a custom `devcontainer.json` may need the `sshd` feature.
+
 ## Start a session
 
 1. In the project rail, click **+** next to Projects and choose **Open folder on a machine…**.

@@ -26,6 +26,9 @@ export function ConnectionsSettings() {
   const [name, setName] = useState("");
   const [target, setTarget] = useState("");
   const [port, setPort] = useState("");
+  const [kind, setKind] = useState<"ssh" | "codespace">("ssh");
+  const [repo, setRepo] = useState("");
+  const [branch, setBranch] = useState("");
   const [jobId, setJobId] = useState<string>();
   const [job, setJob] = useState<SshSetup>();
   const [busy, setBusy] = useState(false);
@@ -75,10 +78,13 @@ export function ConnectionsSettings() {
             setTarget("");
             setName("");
             setPort("");
+            setRepo("");
+            setBranch("");
+            const codespace = next.machine.ssh?.codespace;
             setNotice(
               updatingMachine
                 ? `${next.machine.name} was updated and reconnected.`
-                : `${next.machine.name} is connected. To work on it, click + next to Projects in the project rail and choose Open folder on a machine.`,
+                : `${next.machine.name} is connected. ${codespace ? `Sign in to Claude Code or Codex there first: run gh codespace ssh -c ${codespace} in a terminal and log in. Your repository is in /workspaces. Then` : "To work on it,"} click + next to Projects in the project rail and choose Open folder on a machine.`,
             );
             setUpdatingMachine(undefined);
             setStatus((current) => ({
@@ -174,11 +180,17 @@ export function ConnectionsSettings() {
             machineId: machine.id,
             ...(upgrade ? { upgrade: true } : {}),
           })
-        : await invoke<string>("remote_ssh_begin", {
-            target: target.trim(),
-            name: name.trim(),
-            port: port ? Number(port) : null,
-          });
+        : kind === "codespace"
+          ? await invoke<string>("remote_codespace_begin", {
+              repo: repo.trim(),
+              branch: branch.trim(),
+              name: name.trim(),
+            })
+          : await invoke<string>("remote_ssh_begin", {
+              target: target.trim(),
+              name: name.trim(),
+              port: port ? Number(port) : null,
+            });
       if (!alive.current) {
         await invoke("remote_ssh_cancel", { jobId: id });
         return;
@@ -273,9 +285,11 @@ export function ConnectionsSettings() {
                     {machine.name}
                   </div>
                   <div className="mt-1 truncate text-[12px] text-content/45">
-                    {machine.ssh
-                      ? `SSH · ${machine.ssh.target}${machine.ssh.port ? ` · port ${machine.ssh.port}` : ""}`
-                      : machine.endpoint}
+                    {machine.ssh?.codespace
+                      ? `GitHub Codespace · ${machine.ssh.codespace}`
+                      : machine.ssh
+                        ? `SSH · ${machine.ssh.target}${machine.ssh.port ? ` · port ${machine.ssh.port}` : ""}`
+                        : machine.endpoint}
                   </div>
                   <div className="mt-1 text-[12px] text-content/50">
                     {status[machine.id] ?? "Checking connection…"}
@@ -393,12 +407,62 @@ export function ConnectionsSettings() {
             void begin();
           }}
         >
-          <div className="flex items-center justify-between">
-            <h3 className="text-[14px] font-medium">Connect through SSH</h3>
-            <span className="rounded bg-selection px-2 py-1 text-[11px] text-content/60">
-              SSH
-            </span>
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-[14px] font-medium">
+              {kind === "codespace"
+                ? "Create a free cloud machine"
+                : "Connect through SSH"}
+            </h3>
+            <div className="flex gap-1" role="group" aria-label="Machine type">
+              {(
+                [
+                  ["ssh", "SSH"],
+                  ["codespace", "Free cloud"],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  disabled={busy}
+                  aria-pressed={kind === value}
+                  className={`rounded px-2 py-1 text-[11px] ${kind === value ? "bg-selection text-content" : "text-content/50 hover:text-content"}`}
+                  onClick={() => setKind(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
+          {kind === "codespace" ? (
+            <>
+              <label className="flex flex-col gap-1.5 text-[12px] text-content/65">
+                GitHub repository
+                <input
+                  autoFocus
+                  required
+                  disabled={busy}
+                  className={input}
+                  value={repo}
+                  onChange={(event) => setRepo(event.target.value)}
+                  placeholder="owner/repo"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+              <label className="flex flex-col gap-1.5 text-[12px] text-content/65">
+                Branch
+                <input
+                  disabled={busy}
+                  className={input}
+                  value={branch}
+                  onChange={(event) => setBranch(event.target.value)}
+                  placeholder="Optional, defaults to the repository's default branch"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+            </>
+          ) : (
           <label className="flex flex-col gap-1.5 text-[12px] text-content/65">
             SSH address
             <input
@@ -413,6 +477,7 @@ export function ConnectionsSettings() {
               spellCheck={false}
             />
           </label>
+          )}
           <label className="flex flex-col gap-1.5 text-[12px] text-content/65">
             Name <span className="sr-only">(optional)</span>
             <input
@@ -427,6 +492,18 @@ export function ConnectionsSettings() {
               spellCheck={false}
             />
           </label>
+          {kind === "codespace" ? (
+            <p className="text-[12px] leading-relaxed text-content/45">
+              MonoCode uses your GitHub CLI login to create a 2-core codespace
+              with the repository checked out, then installs its host there.
+              Personal GitHub accounts get free codespace hours every month.
+              The codespace stops after 4 hours without a connection, which
+              also stops its agents; reconnecting starts it again. It is not
+              deleted when you remove it here; manage it at
+              github.com/codespaces.
+            </p>
+          ) : (
+            <>
           <details className="text-[12px] text-content/50">
             <summary className="cursor-pointer">Advanced</summary>
             <label className="mt-3 flex max-w-40 flex-col gap-1.5">
@@ -462,6 +539,8 @@ export function ConnectionsSettings() {
             you reconnect. The host keeps running until you stop it on that
             machine; removing it here only disconnects this desktop.
           </p>
+            </>
+          )}
           <div className="flex justify-end gap-2">
             <button
               type="button"
@@ -471,8 +550,17 @@ export function ConnectionsSettings() {
             >
               Cancel
             </button>
-            <button className={button} disabled={busy || !target.trim()}>
-              {busy ? "Connecting…" : "Connect"}
+            <button
+              className={button}
+              disabled={
+                busy || !(kind === "codespace" ? repo.trim() : target.trim())
+              }
+            >
+              {busy
+                ? "Connecting…"
+                : kind === "codespace"
+                  ? "Create and connect"
+                  : "Connect"}
             </button>
           </div>
         </form>

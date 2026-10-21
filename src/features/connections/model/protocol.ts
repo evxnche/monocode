@@ -214,7 +214,13 @@ export type RemoteMachine = {
   name: string;
   endpoint: string;
   environmentId: string;
-  ssh?: { target: string; port?: number | null; remotePort: number } | null;
+  ssh?: {
+    target: string;
+    port?: number | null;
+    remotePort: number;
+    /** The GitHub codespace this machine is, when MonoCode created one. */
+    codespace?: string | null;
+  } | null;
 };
 
 export type SshSetup = {

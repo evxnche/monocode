@@ -46,6 +46,7 @@ mod pty;
 mod quick_composer;
 mod rate_limits;
 mod reminders;
+mod codespaces;
 mod remote;
 mod remote_ssh;
 mod resources;
@@ -324,6 +325,7 @@ pub fn run() {
             remote::remote_disconnect,
             remote::remote_request,
             remote::remote_ssh_begin,
+            remote::remote_codespace_begin,
             remote::remote_ssh_reconnect,
             remote::remote_ssh_poll,
             remote::remote_ssh_answer,
