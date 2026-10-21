@@ -100,7 +100,9 @@ function sessionReceipt(block: Block): SessionReceipt {
       : undefined;
     if (
       call &&
-      ["sessions.start", "sessions.list", "sessions.send"].includes(call.action)
+      ["sessions.start", "sessions.list", "sessions.send", "sessions.ask"].includes(
+        call.action,
+      )
     ) {
       try {
         const receipt = JSON.parse(block.tool.detail ?? "");
@@ -137,7 +139,7 @@ function sessionReceipt(block: Block): SessionReceipt {
             })),
           );
         } else if (
-          call.action === "sessions.send" &&
+          (call.action === "sessions.send" || call.action === "sessions.ask") &&
           receipt?.ok === true &&
           receipt.result?.submitted === true &&
           typeof receipt.result.sessionId === "string"

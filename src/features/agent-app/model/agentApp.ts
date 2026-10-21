@@ -41,7 +41,11 @@ import type { Worktree, Worktrees } from "../../source-control/model/worktrees";
 import { pathKey, projectName } from "../../../shared/lib/paths";
 import type { SplitDir } from "../../workspace/model/layout";
 import { consumeOperatorCommand } from "../../sessions/model/operatorCommand";
-import { sessionConversationPage, type SessionReadOptions } from "./sessionConversation";
+import {
+  askedTurn,
+  sessionConversationPage,
+  type SessionReadOptions,
+} from "./sessionConversation";
 import {
   CARD_FIELDS,
   parseCard,
@@ -173,6 +177,10 @@ const FIELDS = new Map<string, readonly string[]>([
   ["sessions.list", ["project"]],
   ["sessions.read", ["sessionId", "before", "limit", "maxChars", "project"]],
   ["sessions.send", ["sessionId", "prompt", "project", "notifyOnComplete"]],
+  [
+    "sessions.ask",
+    ["sessionId", "prompt", "project", "timeoutSeconds", "maxChars"],
+  ],
   ["sessions.draft", ["sessionId", "prompt", "project"]],
   ["sessions.stop", ["sessionId", "project"]],
   ["sessions.archive", ["sessionId", "project"]],
@@ -221,6 +229,11 @@ const FIELDS = new Map<string, readonly string[]>([
   ["habits.remove", ["id"]],
   ["chat.card", [...CARD_FIELDS]],
 ]);
+
+/** sessions.ask waits inside the CLI's 40-second read timeout. */
+const ASK_MAX_SECONDS = 25;
+const ASK_DEFAULT_SECONDS = 20;
+const ASK_POLL_MS = 500;
 
 function fields(action: string, input: Record<string, unknown>) {
   const allowed = FIELDS.get(action);
@@ -1027,6 +1040,61 @@ export async function handleAgentApp(
         ...result,
         ...(notifyMonoId ? { notifyOnComplete: true } : {}),
       };
+    }
+    case "sessions.ask": {
+      const id = requiredString(input.sessionId, "sessionId", 256);
+      const timeoutSeconds = input.timeoutSeconds ?? ASK_DEFAULT_SECONDS;
+      if (
+        !Number.isInteger(timeoutSeconds) ||
+        (timeoutSeconds as number) < 0 ||
+        (timeoutSeconds as number) > ASK_MAX_SECONDS
+      )
+        throw new Error(
+          `timeoutSeconds must be an integer from 0 to ${ASK_MAX_SECONDS}`,
+        );
+      const maxChars = input.maxChars ?? 4000;
+      if (
+        !Number.isInteger(maxChars) ||
+        (maxChars as number) < 200 ||
+        (maxChars as number) > 6000
+      )
+        throw new Error("maxChars must be an integer from 200 to 6000");
+      // A retry under the same request ID finds the submitted turn and only waits.
+      const sent = (await handleAgentApp(
+        source,
+        requestId,
+        "sessions.send",
+        {
+          sessionId: id,
+          prompt: input.prompt,
+          ...(input.project !== undefined ? { project: input.project } : {}),
+        },
+        host,
+      )) as { alreadySubmitted: boolean };
+      const deadline = Date.now() + (timeoutSeconds as number) * 1000;
+      for (;;) {
+        const target = await host.session(id);
+        if (!target) throw new Error("Session is unavailable in this project");
+        const turn = askedTurn(
+          target,
+          `app-${source.id}-${requestId}`,
+          maxChars as number,
+        );
+        if (turn.status !== "running" || Date.now() >= deadline)
+          return {
+            sessionId: id,
+            submitted: true,
+            alreadySubmitted: sent.alreadySubmitted,
+            requestId,
+            ...turn,
+            ...(turn.status === "running"
+              ? {
+                  next: `Still working. Repeat this sessions.ask with the same input and --request-id ${requestId} to keep waiting; it will not send the prompt again.`,
+                }
+              : {}),
+          };
+        await new Promise((resolve) => setTimeout(resolve, ASK_POLL_MS));
+      }
     }
     case "sessions.draft": {
       const id = requiredString(input.sessionId, "sessionId", 256);

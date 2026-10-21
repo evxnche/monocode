@@ -1,6 +1,10 @@
 // @vitest-environment happy-dom
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { newSession } from "../../sessions/model/session";
+import {
+  newSession,
+  type Block,
+  type Session,
+} from "../../sessions/model/session";
 import {
   resetHarnessModelOverlays,
   setHarnessModels,
@@ -665,6 +669,175 @@ describe("agent app commands", () => {
       ),
     ).rejects.toThrow("not found in this project");
     expect(host.send).toHaveBeenCalledTimes(1);
+  });
+
+  describe("sessions.ask", () => {
+    const asked = (
+      busy: boolean,
+      replies: Partial<Block>[] = [],
+    ): Session => ({
+      ...newSession("codex", "/tmp/project", "codex:test"),
+      id: "other",
+      busy,
+      blocks: [
+        { id: "u0", role: "user", text: "Earlier" },
+        { id: "a0", role: "assistant", text: "Earlier answer" },
+        {
+          id: "u1",
+          role: "user",
+          text: "Which file owns auth?",
+          appRequestId: "app-lead-ask-1",
+        },
+        ...replies.map((block, index) => ({
+          id: `r${index}`,
+          role: "assistant" as const,
+          text: "",
+          ...block,
+        })),
+      ],
+    });
+
+    it("sends the question and returns the finished reply", async () => {
+      const { source, host } = fixture();
+      host.session = vi.fn(async () =>
+        asked(false, [{ text: "Looking" }, { text: "src/auth.ts" }]),
+      );
+      expect(
+        await handleAgentApp(
+          source,
+          "ask-1",
+          "sessions.ask",
+          { sessionId: "other", prompt: "Which file owns auth?" },
+          host,
+        ),
+      ).toMatchObject({
+        sessionId: "other",
+        submitted: true,
+        turnId: "u1",
+        status: "done",
+        reply: { text: "src/auth.ts", truncated: false },
+      });
+      expect(host.send).toHaveBeenCalledWith(
+        "other",
+        "Which file owns auth?",
+        "app-lead-ask-1",
+      );
+    });
+
+    it("waits for a running turn to finish", async () => {
+      vi.useFakeTimers();
+      try {
+        const { source, host } = fixture();
+        let polls = 0;
+        host.session = vi.fn(async () =>
+          ++polls < 3 ? asked(true) : asked(false, [{ text: "Done" }]),
+        );
+        const result = handleAgentApp(
+          source,
+          "ask-1",
+          "sessions.ask",
+          { sessionId: "other", prompt: "Which file owns auth?" },
+          host,
+        );
+        await vi.advanceTimersByTimeAsync(1_500);
+        await expect(result).resolves.toMatchObject({
+          status: "done",
+          reply: { text: "Done" },
+        });
+        expect(polls).toBe(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("tells the caller how to keep waiting without resending", async () => {
+      const { source, host } = fixture();
+      host.session = vi.fn(async () => asked(true, [{ text: "partial" }]));
+      const result = await handleAgentApp(
+        source,
+        "ask-1",
+        "sessions.ask",
+        {
+          sessionId: "other",
+          prompt: "Which file owns auth?",
+          timeoutSeconds: 0,
+        },
+        host,
+      );
+      expect(result).toMatchObject({
+        status: "running",
+        reply: null,
+        requestId: "ask-1",
+      });
+      expect((result as { next: string }).next).toContain(
+        "--request-id ask-1",
+      );
+    });
+
+    it("reports failed and stopped turns", async () => {
+      const { source, host } = fixture();
+      host.session = vi.fn(async () =>
+        asked(false, [
+          { role: "system", text: "Usage limit reached", notice: "error" },
+        ]),
+      );
+      expect(
+        await handleAgentApp(
+          source,
+          "ask-1",
+          "sessions.ask",
+          { sessionId: "other", prompt: "Which file owns auth?" },
+          host,
+        ),
+      ).toMatchObject({ status: "failed", error: "Usage limit reached" });
+      host.session = vi.fn(async () =>
+        asked(false, [
+          { text: "Half" },
+          { role: "system", text: "Stopped", notice: "interrupt" },
+        ]),
+      );
+      expect(
+        await handleAgentApp(
+          source,
+          "ask-1",
+          "sessions.ask",
+          { sessionId: "other", prompt: "Which file owns auth?" },
+          host,
+        ),
+      ).toMatchObject({ status: "stopped", reply: { text: "Half" } });
+    });
+
+    it("rejects waits past the CLI timeout and asking itself", async () => {
+      const { source, host } = fixture();
+      await expect(
+        handleAgentApp(
+          source,
+          "ask-2",
+          "sessions.ask",
+          { sessionId: "other", prompt: "hi", timeoutSeconds: 26 },
+          host,
+        ),
+      ).rejects.toThrow("timeoutSeconds");
+      await expect(
+        handleAgentApp(
+          source,
+          "ask-3",
+          "sessions.ask",
+          { sessionId: "lead", prompt: "hi" },
+          host,
+        ),
+      ).rejects.toThrow("current conversation");
+      await expect(
+        handleAgentApp(
+          source,
+          "ask-4",
+          "sessions.ask",
+          { sessionId: "other", prompt: "hi", notifyOnComplete: true },
+          host,
+        ),
+      ).rejects.toThrow("Unknown sessions.ask fields");
+      expect(host.send).not.toHaveBeenCalled();
+    });
   });
 
   it("saves an unsent draft in another listed project session", async () => {

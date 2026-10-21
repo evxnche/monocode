@@ -1,4 +1,8 @@
-import type { Block, Session } from "../../sessions/model/session";
+import {
+  sessionNeedsInput,
+  type Block,
+  type Session,
+} from "../../sessions/model/session";
 import { operatorUserPrompt } from "../../sessions/model/operatorCommand";
 
 type Exchange = { user: Block; assistants: Block[] };
@@ -76,5 +80,50 @@ export function sessionConversationPage(
       earlierAssistantMessages: Math.max(0, assistants.length - 1),
     })),
     nextBefore: start > 0 ? selected[0]?.user.id : null,
+  };
+}
+
+/** Where the turn submitted under `appRequestId` stands, with its final reply. */
+export function askedTurn(
+  session: Session,
+  appRequestId: string,
+  maxChars: number,
+) {
+  const start = session.blocks.findIndex(
+    (block) => block.role === "user" && block.appRequestId === appRequestId,
+  );
+  if (start < 0) throw new Error("The asked turn is no longer in this session");
+  const user = session.blocks[start];
+  const rest = session.blocks.slice(start + 1);
+  const next = rest.findIndex(
+    (block) =>
+      block.role === "user" &&
+      !block.draft &&
+      (!block.internal || block.monoSessionCompletion),
+  );
+  const own = next < 0 ? rest : rest.slice(0, next);
+  const latest = next < 0;
+  if (latest && (session.busy || sessionNeedsInput(session)))
+    return {
+      turnId: user.id,
+      status: sessionNeedsInput(session) ? "needsInput" : "running",
+      reply: null,
+    };
+  const reply = [...own]
+    .reverse()
+    .find(
+      (block) =>
+        block.role === "assistant" && !block.internal && block.text.trim(),
+    );
+  const failure = own.find((block) => block.notice === "error");
+  return {
+    turnId: user.id,
+    status: failure
+      ? "failed"
+      : own.some((block) => block.notice === "interrupt")
+        ? "stopped"
+        : "done",
+    ...(failure ? { error: capped(failure.text, maxChars).text } : {}),
+    reply: reply ? capped(reply.text, maxChars) : null,
   };
 }

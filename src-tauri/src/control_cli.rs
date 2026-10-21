@@ -82,11 +82,12 @@ const ACTIONS: [&str; 12] = [
     "list", "delegate", "get", "steer", "message", "retry", "cancel", "wait", "review", "finish",
     "respond", "answer",
 ];
-const APP_ACTIONS: [&str; 32] = [
+const APP_ACTIONS: [&str; 33] = [
     "models.list",
     "sessions.list",
     "sessions.read",
     "sessions.send",
+    "sessions.ask",
     "sessions.draft",
     "sessions.start",
     "sessions.stop",
@@ -137,6 +138,17 @@ Actions:
                   A busy session is rejected. Reuse --request-id on retries.
                   Optional notifyOnComplete:true asks for a completion report
                   in the calling Mono's chat. It waits until that Mono is idle.
+  sessions.ask   {"sessionId":"...","prompt":"...","timeoutSeconds":20,
+                  "maxChars":4000}
+                  Ask an idle project session a question and wait for its
+                  answer. Sends like sessions.send, then waits up to
+                  timeoutSeconds (0-25, default 20) for that turn to end.
+                  status is done, stopped, failed, needsInput or running;
+                  reply holds its final message, capped at maxChars
+                  (200-6000, default 4000). While running, repeat the same
+                  call with --request-id from the result to keep waiting;
+                  the prompt is not sent again. For delegated work, use
+                  sessions.send with notifyOnComplete instead.
   sessions.draft {"sessionId":"...","prompt":"..."}
                   Save an unsent draft in an idle project session. Existing
                   drafts are preserved; send or remove one in MonoCode first.
@@ -637,6 +649,7 @@ mod tests {
         for action in [
             "sessions.read",
             "sessions.send",
+            "sessions.ask",
             "sessions.draft",
             "sessions.stop",
             "sessions.archive",
