@@ -3,7 +3,7 @@
 //! user's own `~/.ssh/config` is never edited.
 use crate::remote_ssh::{Job, SshTarget};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{atomic::Ordering, Arc};
 use std::time::{Duration, Instant};
 
@@ -60,6 +60,46 @@ pub fn host_alias(config: &str) -> Result<String, String> {
         .ok_or_else(|| "gh did not return SSH settings for the codespace".into())
 }
 
+fn is_github_cli(version: &str) -> bool {
+    version.trim_start().starts_with("gh version ")
+}
+
+/// The GitHub CLI, skipping other programs named `gh` (npm's node-gh, say).
+fn github_cli() -> Option<PathBuf> {
+    let name = if cfg!(windows) { "gh.exe" } else { "gh" };
+    std::env::split_paths(&crate::harness::gui_search_path())
+        .map(|dir| dir.join(name))
+        .filter(|path| path.is_file())
+        .find(|path| {
+            let mut cmd = Command::new(path);
+            cmd.arg("--version")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            crate::hide_window_console(&mut cmd);
+            let Ok(mut child) = cmd.spawn() else {
+                return false;
+            };
+            // Some other `gh` programs wait for input instead of answering.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while matches!(child.try_wait(), Ok(None)) {
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            child
+                .wait_with_output()
+                .map(|output| {
+                    output.status.success()
+                        && is_github_cli(&String::from_utf8_lossy(&output.stdout))
+                })
+                .unwrap_or(false)
+        })
+}
+
 fn gh(program: &Path, args: &[&str]) -> Result<String, String> {
     let mut cmd = Command::new(program);
     cmd.args(args)
@@ -94,7 +134,7 @@ pub fn create(
     repo: &str,
     branch: Option<&str>,
 ) -> Result<SshTarget, String> {
-    let program = crate::harness::resolve_gui_binary("gh").ok_or(
+    let program = github_cli().ok_or(
         "GitHub CLI (gh) is not installed. Install it from https://cli.github.com and run `gh auth login`.",
     )?;
     job.message("Checking GitHub Codespaces access…");
@@ -185,6 +225,21 @@ mod tests {
         assert_eq!(validate_branch("feat/x").unwrap().as_deref(), Some("feat/x"));
         assert!(validate_branch("--web").is_err());
         assert!(validate_branch("a b").is_err());
+    }
+
+    #[test]
+    fn tells_the_github_cli_from_other_gh_programs() {
+        assert!(is_github_cli("gh version 2.83.0 (2026-09-30)\nhttps://github.com/cli/cli"));
+        assert!(!is_github_cli("0.1.4"));
+        assert!(!is_github_cli("usage: gh <command> [--flags]"));
+    }
+
+    #[test]
+    #[ignore = "needs the GitHub CLI installed on this machine"]
+    fn finds_the_installed_github_cli() {
+        let program = github_cli().expect("GitHub CLI not found");
+        let output = Command::new(&program).arg("--version").output().unwrap();
+        assert!(is_github_cli(&String::from_utf8_lossy(&output.stdout)), "{program:?}");
     }
 
     #[test]
